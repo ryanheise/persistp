@@ -155,7 +155,7 @@ As in the `List` example, these two lines result in the creation of two files
 `authors/1.properties` and `authors/2.properties`. There is no need to invoke
 `book.save()` since the book contains no `authors` property.
 
-### Lazy loading an soft references
+### Lazy loading and soft references
 
 To reduce the memory footprint, list and map elements are not loaded into memory
 until accessed, and soft references allow elements to be reclaimed from memory
