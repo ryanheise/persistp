@@ -76,6 +76,15 @@ book.sold++;
 book.save();
 ```
 
+### Delete an existing entity
+
+```java
+book.delete();
+```
+
+The associated properties file is deleted and the book is removed from the
+`EntityMap`.
+
 ### Implementing a one-to-many relationship as a `List`
 
 A book has a list of authors:
@@ -132,6 +141,16 @@ the property `authors=1,2` whose value is a comma-separate list of the keys of
 the authors in the list. You MUST call `book.save()` after modifying the book's
 list, otherwise the changes to the `authors` property will not be stored.
 
+Removing an author similarly involves deleting the author and updating the list:
+
+```java
+book.authors.get(0).delete();
+book.save();
+```
+
+The first line deletes `authors/1.properties`. The second line writes the new
+list to `book1.properties` with the property `authors=2`.
+
 ### Implementing a one-to-many relationship as a `Map`
 
 ```java
@@ -154,6 +173,13 @@ book.authors.put("2", new Author(2, "Author 2"));
 As in the `List` example, these two lines result in the creation of two files
 `authors/1.properties` and `authors/2.properties`. There is no need to invoke
 `book.save()` since the book contains no `authors` property.
+
+```java
+book.authors.get("1").delete();
+```
+
+This deletes the author with key "1". There is no need to invoke `book.save()`
+since the book contains no `authors` property.
 
 ### Lazy loading and soft references
 

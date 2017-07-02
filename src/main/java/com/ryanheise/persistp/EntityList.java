@@ -6,9 +6,10 @@ import java.util.AbstractList;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.List;
 
-public class EntityList<X extends Entity> extends AbstractList<X> {
+public class EntityList<X extends Entity> extends AbstractList<X> implements EntityCollection {
 	public static <X extends Entity> EntityList<X> create(Class<X> entityClass, List<String> keys, File filePattern) {
 		return create(null, entityClass, keys, filePattern);
 	}
@@ -46,7 +47,7 @@ public class EntityList<X extends Entity> extends AbstractList<X> {
 					entity = entityClass.newInstance();
 					entity.load(file);
 					entity.setKeyProp(key);
-					if (parent != null) entity.injectBackRef(parent);
+					if (parent != null) entity.setParent(parent, this);
 					entities.set(i, new SoftReference<X>(entity));
 				}
 				catch (Exception e) {
@@ -65,19 +66,52 @@ public class EntityList<X extends Entity> extends AbstractList<X> {
 		catch (IOException e) {
 			throw new RuntimeException(e);
 		}
+		catch (IllegalAccessException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
-	public void addEx(int i, X entity) throws IOException {
+	public void addEx(int i, X entity) throws IOException, IllegalAccessException {
 		entities.add(i, new SoftReference<X>(entity));
 		String id = entity.getKeyProp();
 		keys.add(i, id);
-		File file = substitute(id);
-		entity.setPropertiesFile(file);
-		entity.save();
+		if (entity.getPropertiesFile() == null) {
+			File file = substitute(id);
+			entity.setPropertiesFile(file);
+			entity.save();
+		}
+		if (parent != null) entity.setParent(parent, this);
 	}
 
+	@Override
+	public X remove(int i) {
+		X old = null;
+		SoftReference<X> oldRef = entities.remove(i);
+		keys.remove(i);
+		if (oldRef != null)
+			old = oldRef.get();
+		// XXX: If old is still null, should I load it before removing it to abide with the semantics of remove()?
+		return old;
+	}
+
+	@Override
+	public void removeKey(String key) {
+		for (Iterator<X> it = iterator(); it.hasNext();) {
+			if (key.equals(it.next().getKeyProp())) {
+				it.remove();
+				break;
+			}
+		}
+	}
+
+	@Override
 	public int size() {
 		return keys.size();
+	}
+
+	@Override
+	public int hashCode() {
+		return size(); // Because the list is lazy, don't load the values.
 	}
 
 	private File substitute(String key) {

@@ -17,7 +17,7 @@ import java.io.File;
  * The * wildcard stands for the part of the path that will
  * become the key in the map.
  */
-public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
+public class EntityMap<X extends Entity> extends AbstractMap<String, X> implements EntityCollection {
 	public static <X extends Entity> EntityMap<X> create(Class<X> entityClass, String filePattern) throws IOException {
 		return create(null, entityClass, new File(filePattern));
 	}
@@ -48,15 +48,22 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 			loadKeys();
 	}
 
+	@Override
+	public void removeKey(String key) {
+		remove(key);
+	}
+
 	public X putEx(String key, X value) throws IOException, IllegalAccessException {
 		if (filePattern == null)
 			throw new IllegalStateException("Must be associated with a file first");
 		X old = get(key);
-		File file = substitute(key);
-		value.setPropertiesFile(file);
 		entities.put(key, new SoftReference<X>(value));
-		value.save();
-		if (parent != null) value.injectBackRef(parent);
+		if (value.getPropertiesFile() == null) {
+			File file = substitute(key);
+			value.setPropertiesFile(file);
+			value.save();
+		}
+		if (parent != null) value.setParent(parent, this);
 		return old;
 	}
 
@@ -113,6 +120,21 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		}
 	}
 
+	@Override
+	public X remove(Object key) {
+		X old = null;
+		SoftReference<X> oldRef = entities.remove(key);
+		if (oldRef != null)
+			old = oldRef.get();
+		// XXX: If old is still null, should I load it before removing it to abide with the semantics of remove()?
+		return old;
+	}
+
+	@Override
+	public int hashCode() {
+		return size(); // Because the map is lazy, don't load the values.
+	}
+
 	public Set<Map.Entry<String, X>> entrySet() {
 		Set<Map.Entry<String, X>> entrySet;
 		return (entrySet = this.entrySet) == null ? (this.entrySet = new EntrySet()) : entrySet;
@@ -137,8 +159,6 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		}
 
 		public X getValue() {
-			/* SoftReference<X> ref = originalEntry.getValue(); */
-			/* if (ref != null) */
 			return lazyGet(getKey());
 		}
 
@@ -160,6 +180,7 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 			return null;
 		}
 
+		@Override
 		public boolean hasNext() {
 			return it.hasNext();
 		}
@@ -179,7 +200,7 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 					entity = entityClass.newInstance();
 					entity.load(file);
 					entity.setKeyProp(key);
-					if (parent != null) entity.injectBackRef(parent);
+					if (parent != null) entity.setParent(parent, this);
 					entities.put(key, new SoftReference<X>(entity));
 				}
 				catch (Exception e) {
@@ -210,8 +231,6 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		String beforeStar = pattern.substring(0, pattern.indexOf('*'));
 		String afterStar = pattern.substring(pattern.indexOf('*') + 1);
 		File directory = starFile.getParentFile();
-		//System.out.println("starFile = " + starFile);
-		//System.out.println("directory = " + directory);
 		directory.mkdirs();
 		for (File file : directory.listFiles()) {
 			String name = file.getName();
