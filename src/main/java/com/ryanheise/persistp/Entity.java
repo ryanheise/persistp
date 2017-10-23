@@ -271,7 +271,6 @@ public abstract class Entity {
 		String propName = propName(field);
 		EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
 		StringBuilder listStr = new StringBuilder();
-		System.out.println("storeList " + list);
 		for (Entity entity : list) {
 			if (listStr.length() == 0)
 				listStr.append(entity.getKeyProp());
