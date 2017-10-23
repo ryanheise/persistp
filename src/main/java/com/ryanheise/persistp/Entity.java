@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Set;
 import java.util.HashSet;
+import java.lang.reflect.ParameterizedType;
 import java.io.File;
 
 public abstract class Entity {
@@ -239,7 +240,9 @@ public abstract class Entity {
 
 	private void loadMap(Field field) throws IllegalAccessException, IOException {
 		FPattern fPattern = field.getAnnotation(FPattern.class);
-		Class<? extends Entity> elementType = fPattern.type();
+		//Class<? extends Entity> elementType = fPattern.type();
+		ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[1]; 
 		File filePattern = file == null ? null : new File(file.getParent(), fPattern.value());
 		EntityMap<? extends Entity> map = EntityMap.create(this, elementType, filePattern);
 		field.set(this, map);
@@ -296,7 +299,9 @@ public abstract class Entity {
 		}
 		else if (fieldType == List.class) {
 			FPattern fPattern = field.getAnnotation(FPattern.class);
-			Class<? extends Entity> elementType = fPattern.type();
+			//Class<? extends Entity> elementType = fPattern.type();
+			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0]; 
 			List<String> keys = new ArrayList<String>();
 			String keysStr = (s != null ? s : "").trim();
 			String[] keysArray = keysStr.length() == 0 ? new String[0] : keysStr.split(", *");
