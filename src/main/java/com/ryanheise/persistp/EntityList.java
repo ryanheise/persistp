@@ -9,99 +9,63 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 
-public class EntityList<X extends Entity> extends AbstractList<X> implements EntityCollection {
-	public static <X extends Entity> EntityList<X> create(Class<X> entityClass, List<String> keys, File filePattern) {
-		return create(null, entityClass, keys, filePattern);
-	}
-
-	public static <X extends Entity> EntityList<X> create(Entity parent, Class<X> entityClass, List<String> keys, File filePattern) {
-		return new EntityList<X>(parent, entityClass, keys, filePattern);
+public class EntityList<X extends Entity> extends AbstractList<X> {
+	static <X extends Entity> EntityList<X> create(Entity parent, Class<X> entityClass) throws IOException {
+		return new EntityList<X>(parent, entityClass);
 	}
 
 	private Entity parent;
 	private Class<X> entityClass;
 	private List<String> keys;
 	private File filePattern;
-	private ArrayList<SoftReference<X>> entities = new ArrayList<SoftReference<X>>();
+	private EntityMap<X> map;
 
-	public EntityList(Entity parent, Class<X> entityClass, List<String> keys, File filePattern) {
+	private EntityList(Entity parent, Class<X> entityClass) throws IOException {
 		this.parent = parent;
 		this.entityClass = entityClass;
-		this.keys = keys;
+		map = EntityMap.instance(parent, entityClass, filePattern);
+		keys = new ArrayList<String>();
+	}
+
+	// called by parent entity as soon as the file is known
+	void bind(File filePattern) throws IOException {
 		this.filePattern = filePattern;
-		for (int i = 0; i < keys.size(); i++)
-			entities.add(null);
+		map = EntityMap.instance(parent, entityClass, filePattern);
+	}
+
+	void setKeys(List<String> keys) {
+		 this.keys = keys;
+	}
+
+	Entity getParent() {
+		return parent;
+	}
+
+	File getFilePattern() {
+		return filePattern;
+	}
+
+	EntityMap<X> getMap() {
+		return map;
 	}
 
 	public X get(int i) {
 		String key = keys.get(i);
-		X entity = null;
-		SoftReference<X> ref = entities.get(i);
-		if (ref != null) {
-			entity = ref.get();
-		}
-		if (entity == null) {
-			File file = substitute(key);
-			if (file.exists()) {
-				try {
-					entity = entityClass.newInstance();
-					entity.load(file);
-					entity.setKeyProp(key);
-					if (parent != null) entity.setParent(parent, this);
-					entities.set(i, new SoftReference<X>(entity));
-				}
-				catch (Exception e) {
-					throw new RuntimeException(e);
-				}
-			}
-		}
+		X entity = map.get(key);
 		return entity;
 	}
 
 	@Override
 	public void add(int i, X entity) {
-		try {
-			addEx(i, entity);
-		}
-		catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-		catch (IllegalAccessException e) {
-			throw new RuntimeException(e);
-		}
-	}
-
-	public void addEx(int i, X entity) throws IOException, IllegalAccessException {
-		entities.add(i, new SoftReference<X>(entity));
 		String id = entity.getKeyProp();
 		keys.add(i, id);
-		if (entity.getPropertiesFile() == null) {
-			File file = substitute(id);
-			entity.setPropertiesFile(file);
-			entity.save();
-		}
-		if (parent != null) entity.setParent(parent, this);
 	}
 
 	@Override
 	public X remove(int i) {
-		X old = null;
-		SoftReference<X> oldRef = entities.remove(i);
+		X old = get(i);
 		keys.remove(i);
-		if (oldRef != null)
-			old = oldRef.get();
-		// XXX: If old is still null, should I load it before removing it to abide with the semantics of remove()?
 		return old;
-	}
-
-	@Override
-	public void removeKey(String key) {
-		for (Iterator<X> it = iterator(); it.hasNext();) {
-			if (key.equals(it.next().getKeyProp())) {
-				it.remove();
-				break;
-			}
-		}
 	}
 
 	@Override
@@ -112,9 +76,5 @@ public class EntityList<X extends Entity> extends AbstractList<X> implements Ent
 	@Override
 	public int hashCode() {
 		return size(); // Because the list is lazy, don't load the values.
-	}
-
-	private File substitute(String key) {
-		return new File(filePattern.getPath().replace("*", key));
 	}
 }

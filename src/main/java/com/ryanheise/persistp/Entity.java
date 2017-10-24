@@ -25,9 +25,8 @@ public abstract class Entity {
 	private File file;
 	private Properties props = new Properties();
 	private Map<Field,SimpleDateFormat> dateFormats = new HashMap<Field,SimpleDateFormat>();
-	private boolean useXml;
 	private Field keyField;
-	private Set<EntityCollection> parentCollections = new HashSet<EntityCollection>();
+	private EntityMap<? extends Entity> parentMap;
 
 	public Entity() {
 		try {
@@ -35,83 +34,78 @@ public abstract class Entity {
 			for (Field field : klass.getDeclaredFields()) {
 				field.setAccessible(true);
 				Key key = field.getAnnotation(Key.class);
-				if (key != null)
+				if (key != null) {
 					if (keyField != null)
 						throw new IllegalStateException("Cannot have more than 1 field with @Key annotation");
 					else
 						keyField = field;
-				// XXX: Reuse code in setPropertiesFile
+				}
 				FPattern fPattern = field.getAnnotation(FPattern.class);
-				if (fPattern == null) continue;
-				Class fieldType = field.getType();
-				if (fieldType == Map.class)
-					loadMap(field);
-				else if (fieldType == List.class)
-					loadList(field);
-				else
-					throw new IllegalStateException(fieldType + " field doesn't support @FPattern");
+				if (fPattern != null) {
+					Class fieldType = field.getType();
+					if (fieldType == Map.class)
+						loadMap(field);
+					else if (fieldType == List.class)
+						loadList(field);
+					else
+						throw new IllegalStateException(fieldType + " field doesn't support @FPattern");
+				}
 			}
 		}
-		catch (ParseException e) {
+		catch (ParseException|IOException|IllegalAccessException e) {
 			throw new RuntimeException(e);
 		}
-		catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-		catch (IllegalAccessException e) {
-			throw new RuntimeException(e);
-		}
+		if (keyField == null)
+			throw new RuntimeException("Entity must have a field annotated with @Key");
 	}
 
-	void load(File file) throws IOException {
-		load(file, false);
-	}
-
-	void load(File file, boolean useXml) throws IOException {
-		this.file = file;
-		this.useXml = useXml;
-		InputStream in = new BufferedInputStream(new FileInputStream(file));
-		try {
-			if (useXml)
-				props.loadFromXML(in);
-			else
+	void load(EntityMap<? extends Entity> parentMap, String key) throws IOException, IllegalAccessException, ParseException {
+		setKeyProp(key);
+		setParent(parentMap);
+		try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
+			if (isPropertiesFormat())
 				props.load(in);
+			else
+				props.loadFromXML(in);
 			Class klass = getClass();
 			for (Field field : klass.getDeclaredFields()) {
-				Class fieldType = field.getType();
 				field.setAccessible(true);
-				if (fieldType == Map.class)
-					loadMap(field);
+				Class fieldType = field.getType();
 				String propName = propName(field);
-				if (propName == null) continue;
-				String value = props.getProperty(propName);
-				setField(field, value);
+				if (propName != null)
+					setField(field, props.getProperty(propName));
 			}
 		}
-		catch (IllegalAccessException e) {
+		catch (IllegalAccessException|ParseException e) {
 			throw new IOException(e);
-		}
-		catch (ParseException e) {
-			throw new IOException(e);
-		}
-		finally {
-			in.close();
 		}
 	}
 
+	public synchronized <X extends Entity> void saveAndAdd(List<X> list) throws IOException {
+		EntityList<X> parentList = (EntityList<X>)list;
+		Entity parent = parentList.getParent();
+		if (parent == null)
+			throw new IllegalArgumentException("List has no parent");
+		EntityMap<X> parentMap = parentList.getMap();
+		saveTo(parentMap);
+		parentList.add((X)this);
+		parent.save();
+	}
+
+	// parent must be set before saving
 	public synchronized void save() throws IOException {
 		if (file == null)
 			throw new IllegalStateException("Entity needs to be associated with a file before saving");
 		file.getCanonicalFile().getParentFile().mkdirs();
-		OutputStream out = null;
+		
 		try {
 			Class klass = getClass();
 			for (Field field : klass.getDeclaredFields()) {
 				field.setAccessible(true);
 				String propName = propName(field);
 				if (propName == null) continue;
-				Class fieldType = field.getType();
 				Object value = field.get(this);
+				Class fieldType = field.getType();
 				if (fieldType == Integer.TYPE)
 					storeInt(field);
 				else if (fieldType == Double.TYPE)
@@ -127,24 +121,33 @@ public abstract class Entity {
 				else
 					throw new IOException("Unsupported type " + fieldType);
 			}
-			out = new BufferedOutputStream(new FileOutputStream(file));
-			if (useXml)
-				props.storeToXML(out, "");
-			else
-				props.store(out, "");
+			try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file))) {
+				if (isPropertiesFormat())
+					props.store(out, "");
+				else
+					props.storeToXML(out, "");
+			}
 		}
 		catch (IllegalAccessException e) {
 			throw new IOException(e);
 		}
-		finally {
-			if (out != null)
-				out.close();
+	}
+
+	public synchronized <Y extends Entity> void saveTo(Map<String, Y> plainParentMap) throws IOException {
+		EntityMap<Y> parentMap = (EntityMap<Y>)plainParentMap;
+		try {
+			setParent(parentMap);
+			save();
+			parentMap.putEx(getKeyProp(), (Y)this);
+		}
+		catch (IllegalAccessException e) {
+			throw new IOException(e);
 		}
 	}
 
 	public synchronized void delete() throws IOException {
-		for (EntityCollection collection : parentCollections)
-			collection.removeKey(getKeyProp());
+		if (parentMap != null)
+			parentMap.removeKey(getKeyProp());
 		File current = file.getCanonicalFile();
 		do {
 			if (current.isFile()) {
@@ -166,56 +169,52 @@ public abstract class Entity {
 		return file;
 	}
 
-	void setPropertiesFile(File file) {
-		this.file = file;
-		try {
-			Class klass = getClass();
-			for (Field field : klass.getDeclaredFields()) {
-				field.setAccessible(true);
-				FPattern fPattern = field.getAnnotation(FPattern.class);
-				if (fPattern == null) continue;
-				Class fieldType = field.getType();
-				if (fieldType == Map.class)
-					loadMap(field);
-				else if (fieldType == List.class)
-					loadList(field);
-				else
-					throw new IllegalStateException(fieldType + " field doesn't support @FPattern");
-			}
-		}
-		catch (ParseException e) {
-			throw new RuntimeException(e);
-		}
-		catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-		catch (IllegalAccessException e) {
-			throw new RuntimeException(e);
-		}
+	private boolean isPropertiesFormat() {
+		return file.getName().endsWith(".properties");
 	}
 
 	String getKeyProp() {
 		try {
+			keyField.setAccessible(true);
 			return String.valueOf(keyField.get(this));
 		}
 		catch (IllegalAccessException e) {
+			e.printStackTrace();
 			throw new RuntimeException(e);
 		}
 	}
 
-	void setKeyProp(String key) throws IllegalAccessException, IOException, ParseException {
+	private void setKeyProp(String key) throws IllegalAccessException, IOException, ParseException {
 		if (keyField != null)
 			setField(keyField, key);
 	}
 
-	<X> void setParent(Entity parent, EntityCollection collection) throws IllegalAccessException {
-		parentCollections.add(collection);
+	// must set the key prop before calling this.
+	//
+	// called before saving for the first time and before loading
+	// sets the parent map, parent entity and file
+	// Also binds the fpattern fields and sets the back reference
+	private void setParent(EntityMap<? extends Entity> parentMap) throws IllegalAccessException, IOException {
+		Entity parent = parentMap.getParent();
+		this.parentMap = parentMap;
+		file = parentMap.substitute(getKeyProp());
 		Class klass = getClass();
 		for (Field field : klass.getDeclaredFields()) {
 			field.setAccessible(true);
-			if (field.getAnnotation(BackRef.class) == null) continue;
 			Class fieldType = field.getType();
-			if (fieldType == parent.getClass()) {
+			FPattern fPattern = field.getAnnotation(FPattern.class);
+			if (fPattern != null) {
+				File filePattern = new File(file.getParent(), fPattern.value());
+				if (fieldType == Map.class) {
+					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)field.get(this);
+					map.bind(filePattern);
+				}
+				else if (fieldType == List.class) {
+					EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
+					list.bind(filePattern);
+				}
+			}
+			if (field.getAnnotation(BackRef.class) != null && parent != null && fieldType == parent.getClass()) {
 				field.set(this, parent);
 			}
 		}
@@ -234,17 +233,18 @@ public abstract class Entity {
 	}
 
 	private void loadList(Field field) throws IllegalAccessException, IOException, ParseException {
-		String propName = propName(field);
-		setField(field, props.getProperty(propName, ""));
+		ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0]; 
+		EntityList<? extends Entity> list = EntityList.create(this, elementType);
+		field.setAccessible(true);
+		field.set(this, list);
 	}
 
 	private void loadMap(Field field) throws IllegalAccessException, IOException {
-		FPattern fPattern = field.getAnnotation(FPattern.class);
-		//Class<? extends Entity> elementType = fPattern.type();
 		ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
 		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[1]; 
-		File filePattern = file == null ? null : new File(file.getParent(), fPattern.value());
-		EntityMap<? extends Entity> map = EntityMap.create(this, elementType, filePattern);
+		EntityMap<? extends Entity> map = EntityMap.instance(this, elementType, (File)null);
+		field.setAccessible(true);
 		field.set(this, map);
 	}
 
@@ -298,18 +298,13 @@ public abstract class Entity {
 			field.set(this, df.parse(s != null ? s : df.format(new Date())));
 		}
 		else if (fieldType == List.class) {
-			FPattern fPattern = field.getAnnotation(FPattern.class);
-			//Class<? extends Entity> elementType = fPattern.type();
-			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
-			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0]; 
+			EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
 			List<String> keys = new ArrayList<String>();
 			String keysStr = (s != null ? s : "").trim();
 			String[] keysArray = keysStr.length() == 0 ? new String[0] : keysStr.split(", *");
 			for (String key : keysArray)
 				keys.add(key);
-			File filePattern = file == null ? null : new File(file.getParent(), fPattern.value());
-			EntityList<? extends Entity> list = EntityList.create(this, elementType, keys, filePattern);
-			field.set(this, list);
+			list.setKeys(keys);
 		}
 		else
 			throw new IOException("Unsupported type " + fieldType);

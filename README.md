@@ -39,13 +39,13 @@ Notes:
 ### Create an `EntityMap`
 
 ```java
-EntityMap<Book> books = EntityMap.create(Book.class, new File("*.properties"));
+EntityMap<Book> books = EntityMap.instance(Book.class, new File("*.properties"));
 ```
 
 Or,
 
 ```java
-EntityMap<Book> books = EntityMap.create(Book.class, "*.properties");
+EntityMap<Book> books = EntityMap.instance(Book.class, "*.properties");
 ```
 
 Each file matching pattern `*.properties` represents an Entity.

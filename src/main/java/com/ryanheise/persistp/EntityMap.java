@@ -17,21 +17,36 @@ import java.io.File;
  * The * wildcard stands for the part of the path that will
  * become the key in the map.
  */
-public class EntityMap<X extends Entity> extends AbstractMap<String, X> implements EntityCollection {
-	public static <X extends Entity> EntityMap<X> create(Class<X> entityClass, String filePattern) throws IOException {
-		return create(null, entityClass, new File(filePattern));
+public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
+	private static Map<File, SoftReference<EntityMap<? extends Entity>>> cache = new HashMap<File, SoftReference<EntityMap<? extends Entity>>>();
+
+	public static synchronized <Y extends Entity> EntityMap<Y> instance(Class<Y> entityClass, String filePattern) throws IOException {
+		return instance(null, entityClass, new File(filePattern));
 	}
 
-	public static <X extends Entity> EntityMap<X> create(Entity parent, Class<X> entityClass, String filePattern) throws IOException {
-		return new EntityMap<X>(parent, entityClass, new File(filePattern));
+	public static synchronized <Y extends Entity> EntityMap<Y> instance(Entity parent, Class<Y> entityClass, String filePattern) throws IOException {
+		return new EntityMap<Y>(parent, entityClass, new File(filePattern));
 	}
 
-	public static <X extends Entity> EntityMap<X> create(Class<X> entityClass, File filePattern) throws IOException {
-		return create(null, entityClass, filePattern);
+	public static synchronized <Y extends Entity> EntityMap<Y> instance(Class<Y> entityClass, File filePattern) throws IOException {
+		return instance(null, entityClass, filePattern);
 	}
 
-	public static <X extends Entity> EntityMap<X> create(Entity parent, Class<X> entityClass, File filePattern) throws IOException {
-		return new EntityMap<X>(parent, entityClass, filePattern);
+	public static synchronized <Y extends Entity> EntityMap<Y> instance(Entity parent, Class<Y> entityClass, File filePattern) throws IOException {
+		EntityMap<Y> map = null;
+		SoftReference<EntityMap<? extends Entity>> mapRef = cache.get(filePattern);
+		if (mapRef != null)
+			map = (EntityMap<Y>)mapRef.get();
+		if (map == null) {
+			map = new EntityMap<Y>(parent, entityClass, filePattern);
+			if (filePattern != null)
+				cache(map);
+		}
+		return map;
+	}
+
+	private static synchronized <Y extends Entity> void cache(EntityMap<Y> entityMap) {
+		cache.put(entityMap.filePattern, new SoftReference(entityMap));
 	}
 
 	private Entity parent;
@@ -48,36 +63,36 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 			loadKeys();
 	}
 
-	@Override
-	public void removeKey(String key) {
+	// called by parent entity as soon as the file is known
+	void bind(File filePattern) throws IOException {
+		this.filePattern = filePattern;
+		loadKeys();
+		cache(this);
+	}
+
+	File getFilePattern() {
+		return filePattern;
+	}
+
+	Entity getParent() {
+		return parent;
+	}
+
+	void removeKey(String key) {
 		remove(key);
 	}
 
-	public X putEx(String key, X value) throws IOException, IllegalAccessException {
+	X putEx(String key, X value) throws IOException, IllegalAccessException {
 		if (filePattern == null)
 			throw new IllegalStateException("Must be associated with a file first");
 		X old = get(key);
 		entities.put(key, new SoftReference<X>(value));
-		if (value.getPropertiesFile() == null) {
-			File file = substitute(key);
-			value.setPropertiesFile(file);
-			value.save();
-		}
-		if (parent != null) value.setParent(parent, this);
 		return old;
 	}
 
 	@Override
 	public X put(String key, X value) {
-		try {
-			return putEx(key, value);
-		}
-		catch (IllegalAccessException e) {
-			throw new RuntimeException(e);
-		}
-		catch (IOException e) {
-			throw new RuntimeException(e);
-		}
+		throw new UnsupportedOperationException();
 	}
 
 	public X get(int key) {
@@ -135,6 +150,7 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 		return size(); // Because the map is lazy, don't load the values.
 	}
 
+	@Override
 	public Set<Map.Entry<String, X>> entrySet() {
 		Set<Map.Entry<String, X>> entrySet;
 		return (entrySet = this.entrySet) == null ? (this.entrySet = new EntrySet()) : entrySet;
@@ -198,9 +214,7 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 			if (file.exists()) {
 				try {
 					entity = entityClass.newInstance();
-					entity.load(file);
-					entity.setKeyProp(key);
-					if (parent != null) entity.setParent(parent, this);
+					entity.load(this, key);
 					entities.put(key, new SoftReference<X>(entity));
 				}
 				catch (Exception e) {
@@ -211,10 +225,11 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 		return entity;
 	}
 
-	private File substitute(String key) {
+	File substitute(String key) {
 		return new File(filePattern.getPath().replace("*", key));
 	}
 
+	@Override
 	public Set<String> keySet() {
 		return entities.keySet();
 	}
