@@ -133,6 +133,21 @@ public abstract class Entity {
 		}
 	}
 
+	/* This would be nice to have, but not until we also provide a similarly convenient
+	 * way to delete an entity from a list.
+	public synchronized <Y extends Entity> void saveTo(List<Y> plainParentList) throws IOException {
+		saveTo(plainParentList.size(), plainParentList);
+	}
+
+	public synchronized <Y extends Entity> void saveTo(int i, List<Y> plainParentList) throws IOException {
+		EntityList<Y> parentList = (EntityList<Y>)plainParentList;
+		EntityMap<Y> parentMap = parentList.getMap();
+		saveTo(parentMap);
+		parentList.add(i, (Y)this);
+		parentList.getParent().save();
+	}
+	*/
+
 	public synchronized <Y extends Entity> void saveTo(Map<String, Y> plainParentMap) throws IOException {
 		EntityMap<Y> parentMap = (EntityMap<Y>)plainParentMap;
 		try {
