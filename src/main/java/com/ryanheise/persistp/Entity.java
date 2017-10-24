@@ -62,6 +62,10 @@ public abstract class Entity {
 	void load(EntityMap<? extends Entity> parentMap, String key) throws IOException, IllegalAccessException, ParseException {
 		setKeyProp(key);
 		setParent(parentMap);
+		load();
+	}
+
+	protected void load() throws IOException {
 		try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
 			if (isPropertiesFormat())
 				props.load(in);
@@ -79,6 +83,22 @@ public abstract class Entity {
 		catch (IllegalAccessException|ParseException e) {
 			throw new IOException(e);
 		}
+	}
+
+	protected final String getProperty(String key) {
+		return props.getProperty(key);
+	}
+
+	protected final String getProperty(String key, String def) {
+		return props.getProperty(key, def);
+	}
+
+	protected final void setProperty(String key, String value) {
+		props.setProperty(key, value);
+	}
+
+	protected final void removeProperty(String key) {
+		props.remove(key);
 	}
 
 	public synchronized <X extends Entity> void saveAndAdd(List<X> list) throws IOException {
@@ -139,7 +159,7 @@ public abstract class Entity {
 		saveTo(plainParentList.size(), plainParentList);
 	}
 
-	public synchronized <Y extends Entity> void saveTo(int i, List<Y> plainParentList) throws IOException {
+	public synchronized final <Y extends Entity> void saveTo(int i, List<Y> plainParentList) throws IOException {
 		EntityList<Y> parentList = (EntityList<Y>)plainParentList;
 		EntityMap<Y> parentMap = parentList.getMap();
 		saveTo(parentMap);
@@ -148,7 +168,7 @@ public abstract class Entity {
 	}
 	*/
 
-	public synchronized <Y extends Entity> void saveTo(Map<String, Y> plainParentMap) throws IOException {
+	public synchronized final <Y extends Entity> void saveTo(Map<String, Y> plainParentMap) throws IOException {
 		EntityMap<Y> parentMap = (EntityMap<Y>)plainParentMap;
 		try {
 			setParent(parentMap);

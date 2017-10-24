@@ -199,3 +199,17 @@ it from the `authorsMap` EntityMap.
 To reduce the memory footprint, list and map elements are not loaded into memory
 until accessed, and soft references allow elements to be reclaimed from memory
 by the garbage collector if the remaining available memory is too low.
+
+### Custom property loading/saving
+
+An `Entity` subclass may override the `load()` and `save()` methods to to load
+and save complex properties that can't be automatically managed by PersistP's
+annotations. Properties can be manually read and written via the following
+methods inherited `Entity` methods:
+
+```
+protected final String getProperty(String key)
+protected final String getProperty(String key, String def)
+protected final void setProperty(String key, String value)
+protected final void removeProperty(String key)
+```
