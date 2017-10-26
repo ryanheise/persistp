@@ -17,7 +17,7 @@ import java.io.File;
  * The * wildcard stands for the part of the path that will
  * become the key in the map.
  */
-public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
+public class EntityMap<X extends Entity> extends AbstractMap<String, X> implements EntityContainer<X> {
 	private static Map<File, SoftReference<EntityMap<? extends Entity>>> cache = new HashMap<File, SoftReference<EntityMap<? extends Entity>>>();
 
 	public static synchronized <Y extends Entity> EntityMap<Y> instance(Class<Y> entityClass, String filePattern) throws IOException {
@@ -69,6 +69,11 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 			loadKeys();
 	}
 
+	@Override
+	public boolean isBound() {
+		return filePattern != null;
+	}
+
 	// called by parent entity as soon as the file is known
 	void bind(File filePattern) throws IOException {
 		this.filePattern = filePattern;
@@ -80,7 +85,8 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		renameInCache(this, filePattern);
 	}
 
-	boolean isPropertiesFormat() {
+	@Override
+	public boolean isPropertiesFormat() {
 		return filePattern.getName().endsWith(".properties");
 	}
 
@@ -88,15 +94,22 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		return filePattern;
 	}
 
-	Entity getParent() {
+	@Override
+	public Entity getParent() {
 		return parent;
 	}
 
-	void removeKey(String key) {
+	@Override
+	public void removeEntity(String key) {
 		remove(key);
 	}
 
-	X putEx(String key, X value) throws IOException, IllegalAccessException {
+	@Override
+	public void putEntity(X entity) throws IOException {
+		putEx(entity.getKeyProp(), entity);
+	}
+
+	X putEx(String key, X value) throws IOException {
 		if (filePattern == null)
 			throw new IllegalStateException("Must be associated with a file first");
 		X old = get(key);
@@ -239,8 +252,17 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		return entity;
 	}
 
-	File substitute(String key) {
+	@Override
+	public File substitute(String key) {
 		return new File(filePattern.getPath().replace("*", key));
+	}
+
+	@Override
+	public void rekeyEntity(String oldKey, String newKey) throws IOException {
+		X entity = get(oldKey);
+		substituteStarFile(oldKey).renameTo(substituteStarFile(newKey));
+		putEntity(entity);
+		removeEntity(oldKey);
 	}
 
 	File getStarFile() throws IOException {

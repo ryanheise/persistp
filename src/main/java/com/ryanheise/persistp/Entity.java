@@ -26,7 +26,7 @@ public abstract class Entity {
 	private Properties props = new Properties();
 	private Map<Field,SimpleDateFormat> dateFormats = new HashMap<Field,SimpleDateFormat>();
 	private Field keyField;
-	private EntityMap<? extends Entity> parentMap;
+	private EntityContainer<? extends Entity> parentContainer;
 
 	public Entity() {
 		try {
@@ -47,6 +47,8 @@ public abstract class Entity {
 						loadMap(field);
 					else if (fieldType == List.class)
 						loadList(field);
+					else if (fieldType == One.class)
+						loadOne(field);
 					else
 						throw new IllegalStateException(fieldType + " field doesn't support @FPattern");
 				}
@@ -55,8 +57,11 @@ public abstract class Entity {
 		catch (ParseException|IOException|IllegalAccessException e) {
 			throw new RuntimeException(e);
 		}
-		if (keyField == null)
-			throw new RuntimeException("Entity must have a field annotated with @Key");
+	}
+
+	void load(One<? extends Entity> parentOne) throws IOException, IllegalAccessException {
+		setParent(parentOne);
+		load();
 	}
 
 	void load(EntityMap<? extends Entity> parentMap, String key) throws IOException, IllegalAccessException, ParseException {
@@ -67,7 +72,7 @@ public abstract class Entity {
 
 	protected void load() throws IOException {
 		try (InputStream in = new BufferedInputStream(new FileInputStream(file()))) {
-			if (parentMap.isPropertiesFormat())
+			if (parentContainer.isPropertiesFormat())
 				props.load(in);
 			else
 				props.loadFromXML(in);
@@ -114,7 +119,7 @@ public abstract class Entity {
 
 	// parent must be set before saving
 	public synchronized void save() throws IOException {
-		if (parentMap == null)
+		if (parentContainer == null)
 			throw new IllegalStateException("saveTo() required on first save");
 		
 		try {
@@ -140,11 +145,10 @@ public abstract class Entity {
 				else
 					throw new IOException("Unsupported type " + fieldType);
 			}
+			// If this entity's key has changed, the file needs to be renamed
 			String newKey = getKeyProp();
 			if (key != null && !key.equals(newKey)) {
-				parentMap.substituteStarFile(key).renameTo(parentMap.substituteStarFile(newKey));
-				putEntity();
-				parentMap.removeKey(key);
+				parentContainer.rekeyEntity(key, newKey);
 				// invalidate child maps based on old file location
 				// and point them to the new location
 				for (Field field : klass.getDeclaredFields()) {
@@ -170,7 +174,7 @@ public abstract class Entity {
 			}
 			// write out the properties to the file
 			try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file()))) {
-				if (parentMap.isPropertiesFormat())
+				if (parentContainer.isPropertiesFormat())
 					props.store(out, "");
 				else
 					props.storeToXML(out, "");
@@ -182,8 +186,8 @@ public abstract class Entity {
 	}
 
 	private <X extends Entity> void putEntity() throws IOException, IllegalAccessException {
-		EntityMap<X> parentMap = (EntityMap<X>)this.parentMap;
-		parentMap.putEx(getKeyProp(), (X)this);
+		EntityContainer<X> parentContainer = (EntityContainer<X>)this.parentContainer;
+		parentContainer.putEntity((X)this);
 	}
 
 	/* This would be nice to have, but not until we also provide a similarly convenient
@@ -201,9 +205,19 @@ public abstract class Entity {
 	}
 	*/
 
-	public synchronized final void saveTo(Map<String, ? extends Entity> parentMap) throws IOException {
+	public synchronized final void saveTo(Map<String, ? extends Entity> parentContainer) throws IOException {
+		saveToContainer((EntityContainer<? extends Entity>)parentContainer);
+	}
+
+	public synchronized final void saveTo(One<? extends Entity> parentContainer) throws IOException {
+		saveToContainer(parentContainer);
+	}
+
+	private synchronized final void saveToContainer(EntityContainer<? extends Entity> parentContainer) throws IOException {
+		if (!parentContainer.isBound())
+			throw new IllegalStateException("Cannot save to unbound container");
 		try {
-			setParent((EntityMap<? extends Entity>)parentMap);
+			setParent(parentContainer);
 			save();
 			putEntity();
 		}
@@ -213,8 +227,8 @@ public abstract class Entity {
 	}
 
 	public synchronized void delete() throws IOException {
-		if (parentMap != null)
-			parentMap.removeKey(getKeyProp());
+		if (parentContainer != null)
+			parentContainer.removeEntity(getKeyProp());
 		File current = file().getCanonicalFile();
 		do {
 			if (current.isFile()) {
@@ -233,6 +247,8 @@ public abstract class Entity {
 	}
 
 	String getKeyProp() {
+		if (keyField == null)
+			return null;
 		try {
 			keyField.setAccessible(true);
 			return String.valueOf(keyField.get(this));
@@ -249,17 +265,17 @@ public abstract class Entity {
 	}
 
 	private File file() throws IOException {
-		return parentMap.substitute(getKeyProp()).getCanonicalFile();
+		return parentContainer.substitute(getKeyProp()).getCanonicalFile();
 	}
 
 	// must set the key prop before calling this.
 	//
 	// called before saving for the first time and before loading
-	// sets the parent map, parent entity and file
+	// sets the parent map, parent entity
 	// Also binds the fpattern fields and sets the back reference
-	private void setParent(EntityMap<? extends Entity> parentMap) throws IllegalAccessException, IOException {
-		Entity parent = parentMap.getParent();
-		this.parentMap = parentMap;
+	private void setParent(EntityContainer<? extends Entity> parentContainer) throws IllegalAccessException, IOException {
+		Entity parent = parentContainer.getParent();
+		this.parentContainer = parentContainer;
 		Class klass = getClass();
 		for (Field field : klass.getDeclaredFields()) {
 			field.setAccessible(true);
@@ -274,6 +290,10 @@ public abstract class Entity {
 				else if (fieldType == List.class) {
 					EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
 					list.bind(filePattern);
+				}
+				else if (fieldType == One.class) {
+					One<? extends Entity> one = (One<? extends Entity>)field.get(this);
+					one.bind(filePattern);
 				}
 			}
 			if (field.getAnnotation(BackRef.class) != null && parent != null && fieldType == parent.getClass()) {
@@ -308,6 +328,14 @@ public abstract class Entity {
 		EntityMap<? extends Entity> map = EntityMap.instance(this, elementType, (File)null);
 		field.setAccessible(true);
 		field.set(this, map);
+	}
+
+	private void loadOne(Field field) throws IllegalAccessException, IOException {
+		ParameterizedType pType = (ParameterizedType)field.getGenericType();
+		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0];
+		One<? extends Entity> one = new One(this, elementType);
+		field.setAccessible(true);
+		field.set(this, one);
 	}
 
 	private void storeInt(Field field) throws IllegalAccessException {
