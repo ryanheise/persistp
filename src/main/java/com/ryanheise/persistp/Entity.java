@@ -54,17 +54,17 @@ public abstract class Entity {
 				}
 			}
 		}
-		catch (ParseException|IOException|IllegalAccessException e) {
+		catch (IOException e) {
 			throw new RuntimeException(e);
 		}
 	}
 
-	void load(One<? extends Entity> parentOne) throws IOException, IllegalAccessException {
+	void load(One<? extends Entity> parentOne) throws IOException {
 		setParent(parentOne);
 		load();
 	}
 
-	void load(EntityMap<? extends Entity> parentMap, String key) throws IOException, IllegalAccessException, ParseException {
+	void load(EntityMap<? extends Entity> parentMap, String key) throws IOException, ParseException {
 		setKeyProp(key);
 		setParent(parentMap);
 		load();
@@ -85,7 +85,7 @@ public abstract class Entity {
 					setField(field, props.getProperty(propName));
 			}
 		}
-		catch (IllegalAccessException|ParseException e) {
+		catch (ParseException e) {
 			throw new IOException(e);
 		}
 	}
@@ -122,70 +122,65 @@ public abstract class Entity {
 		if (parentContainer == null)
 			throw new IllegalStateException("saveTo() required on first save");
 		
-		try {
-			Class klass = getClass();
+		Class klass = getClass();
+		for (Field field : klass.getDeclaredFields()) {
+			field.setAccessible(true);
+			String propName = propName(field);
+			if (propName == null) continue;
+			Object value = getField(field);
+			Class fieldType = field.getType();
+			if (fieldType == Integer.TYPE)
+				storeInt(field);
+			else if (fieldType == Double.TYPE)
+				storeDouble(field);
+			else if (fieldType == Boolean.TYPE)
+				storeBoolean(field);
+			else if (fieldType == String.class)
+				storeString(field);
+			else if (fieldType == Date.class)
+				storeDate(field);
+			else if (fieldType == List.class)
+				storeList(field);
+			else
+				throw new IOException("Unsupported type " + fieldType);
+		}
+		// If this entity's key has changed, the file needs to be renamed
+		String newKey = getKeyProp();
+		if (key != null && !key.equals(newKey)) {
+			parentContainer.rekeyEntity(key, newKey);
+			// invalidate child maps based on old file location
+			// and point them to the new location
 			for (Field field : klass.getDeclaredFields()) {
 				field.setAccessible(true);
-				String propName = propName(field);
-				if (propName == null) continue;
-				Object value = field.get(this);
-				Class fieldType = field.getType();
-				if (fieldType == Integer.TYPE)
-					storeInt(field);
-				else if (fieldType == Double.TYPE)
-					storeDouble(field);
-				else if (fieldType == Boolean.TYPE)
-					storeBoolean(field);
-				else if (fieldType == String.class)
-					storeString(field);
-				else if (fieldType == Date.class)
-					storeDate(field);
-				else if (fieldType == List.class)
-					storeList(field);
-				else
-					throw new IOException("Unsupported type " + fieldType);
-			}
-			// If this entity's key has changed, the file needs to be renamed
-			String newKey = getKeyProp();
-			if (key != null && !key.equals(newKey)) {
-				parentContainer.rekeyEntity(key, newKey);
-				// invalidate child maps based on old file location
-				// and point them to the new location
-				for (Field field : klass.getDeclaredFields()) {
-					field.setAccessible(true);
-					FPattern fPattern = field.getAnnotation(FPattern.class);
-					if (fPattern != null) {
-						File filePattern = new File(file().getParent(), fPattern.value());
-						Class fieldType = field.getType();
-						if (fieldType == Map.class) {
-							EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)field.get(this);
-							map.rebind(filePattern);
-						}
-						else if (fieldType == List.class) {
-							EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
-							list.rebind(filePattern);
-						}
+				FPattern fPattern = field.getAnnotation(FPattern.class);
+				if (fPattern != null) {
+					File filePattern = new File(file().getParent(), fPattern.value());
+					Class fieldType = field.getType();
+					if (fieldType == Map.class) {
+						EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
+						map.rebind(filePattern);
+					}
+					else if (fieldType == List.class) {
+						EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
+						list.rebind(filePattern);
 					}
 				}
-				key = newKey;
 			}
-			else {
-				file().getParentFile().mkdirs();
-			}
-			// write out the properties to the file
-			try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file()))) {
-				if (parentContainer.isPropertiesFormat())
-					props.store(out, "");
-				else
-					props.storeToXML(out, "");
-			}
+			key = newKey;
 		}
-		catch (IllegalAccessException e) {
-			throw new IOException(e);
+		else {
+			file().getParentFile().mkdirs();
+		}
+		// write out the properties to the file
+		try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file()))) {
+			if (parentContainer.isPropertiesFormat())
+				props.store(out, "");
+			else
+				props.storeToXML(out, "");
 		}
 	}
 
-	private <X extends Entity> void putEntity() throws IOException, IllegalAccessException {
+	private <X extends Entity> void putEntity() throws IOException {
 		EntityContainer<X> parentContainer = (EntityContainer<X>)this.parentContainer;
 		parentContainer.putEntity((X)this);
 	}
@@ -216,19 +211,39 @@ public abstract class Entity {
 	private synchronized final void saveToContainer(EntityContainer<? extends Entity> parentContainer) throws IOException {
 		if (!parentContainer.isBound())
 			throw new IllegalStateException("Cannot save to unbound container");
-		try {
-			setParent(parentContainer);
-			save();
-			putEntity();
-		}
-		catch (IllegalAccessException e) {
-			throw new IOException(e);
-		}
+		setParent(parentContainer);
+		save();
+		putEntity();
 	}
 
 	public synchronized void delete() throws IOException {
-		if (parentContainer != null)
-			parentContainer.removeEntity(getKeyProp());
+		// Delete children of this entity
+		Class klass = getClass();
+		for (Field field : klass.getDeclaredFields()) {
+			field.setAccessible(true);
+			FPattern fPattern = field.getAnnotation(FPattern.class);
+			if (fPattern != null) {
+				File filePattern = new File(file().getParent(), fPattern.value());
+				Class fieldType = field.getType();
+				if (fieldType == Map.class) {
+					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
+					map.delete();
+				}
+				/* In the future, List may be a quasi entity container, and we can generalise these 3 cases.
+				else if (fieldType == List.class) {
+					EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
+					list.delete();
+				}
+				*/
+				else if (fieldType == One.class) {
+					One<? extends Entity> one = (One<? extends Entity>)getField(field);
+					one.delete();
+				}
+			}
+		}
+
+		// Delete this entity
+		parentContainer.removeEntity(getKeyProp());
 		File current = file().getCanonicalFile();
 		do {
 			if (current.isFile()) {
@@ -249,17 +264,20 @@ public abstract class Entity {
 	String getKeyProp() {
 		if (keyField == null)
 			return null;
+		keyField.setAccessible(true);
+		return String.valueOf(getField(keyField));
+	}
+
+	private Object getField(Field field) {
 		try {
-			keyField.setAccessible(true);
-			return String.valueOf(keyField.get(this));
+			return field.get(this);
 		}
 		catch (IllegalAccessException e) {
-			e.printStackTrace();
 			throw new RuntimeException(e);
 		}
 	}
 
-	private void setKeyProp(String key) throws IllegalAccessException, IOException, ParseException {
+	private void setKeyProp(String key) throws IOException, ParseException {
 		this.key = key;
 		setField(keyField, key);
 	}
@@ -273,7 +291,7 @@ public abstract class Entity {
 	// called before saving for the first time and before loading
 	// sets the parent map, parent entity
 	// Also binds the fpattern fields and sets the back reference
-	private void setParent(EntityContainer<? extends Entity> parentContainer) throws IllegalAccessException, IOException {
+	private void setParent(EntityContainer<? extends Entity> parentContainer) throws IOException {
 		Entity parent = parentContainer.getParent();
 		this.parentContainer = parentContainer;
 		Class klass = getClass();
@@ -284,20 +302,25 @@ public abstract class Entity {
 			if (fPattern != null) {
 				File filePattern = new File(file().getParent(), fPattern.value());
 				if (fieldType == Map.class) {
-					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)field.get(this);
+					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
 					map.bind(filePattern);
 				}
 				else if (fieldType == List.class) {
-					EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
+					EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
 					list.bind(filePattern);
 				}
 				else if (fieldType == One.class) {
-					One<? extends Entity> one = (One<? extends Entity>)field.get(this);
+					One<? extends Entity> one = (One<? extends Entity>)getField(field);
 					one.bind(filePattern);
 				}
 			}
 			if (field.getAnnotation(BackRef.class) != null && parent != null && fieldType == parent.getClass()) {
-				field.set(this, parent);
+				try {
+					field.set(this, parent);
+				}
+				catch (IllegalAccessException e) {
+					throw new RuntimeException(e);
+				}
 			}
 		}
 	}
@@ -314,55 +337,70 @@ public abstract class Entity {
 		return df;
 	}
 
-	private void loadList(Field field) throws IllegalAccessException, IOException, ParseException {
-		ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
-		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0]; 
-		EntityList<? extends Entity> list = EntityList.create(this, elementType);
-		field.setAccessible(true);
-		field.set(this, list);
+	private void loadList(Field field) throws IOException {
+		try {
+			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0]; 
+			EntityList<? extends Entity> list = EntityList.create(this, elementType);
+			field.setAccessible(true);
+			field.set(this, list);
+		}
+		catch (IllegalAccessException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
-	private void loadMap(Field field) throws IllegalAccessException, IOException {
-		ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
-		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[1]; 
-		EntityMap<? extends Entity> map = EntityMap.instance(this, elementType, (File)null);
-		field.setAccessible(true);
-		field.set(this, map);
+	private void loadMap(Field field) throws IOException {
+		try {
+			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[1]; 
+			EntityMap<? extends Entity> map = EntityMap.instance(this, elementType, (File)null);
+			field.setAccessible(true);
+			field.set(this, map);
+		}
+		catch (IllegalAccessException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
-	private void loadOne(Field field) throws IllegalAccessException, IOException {
-		ParameterizedType pType = (ParameterizedType)field.getGenericType();
-		Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0];
-		One<? extends Entity> one = new One(this, elementType);
-		field.setAccessible(true);
-		field.set(this, one);
+	private void loadOne(Field field) throws IOException {
+		try {
+			ParameterizedType pType = (ParameterizedType)field.getGenericType();
+			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0];
+			One<? extends Entity> one = new One(this, elementType);
+			field.setAccessible(true);
+			field.set(this, one);
+		}
+		catch (IllegalAccessException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
-	private void storeInt(Field field) throws IllegalAccessException {
-		props.setProperty(propName(field), String.valueOf(field.get(this)));
+	private void storeInt(Field field) {
+		props.setProperty(propName(field), String.valueOf(getField(field)));
 	}
 
-	private void storeDouble(Field field) throws IllegalAccessException {
-		props.setProperty(propName(field), String.valueOf(field.get(this)));
+	private void storeDouble(Field field) {
+		props.setProperty(propName(field), String.valueOf(getField(field)));
 	}
 
-	private void storeBoolean(Field field) throws IllegalAccessException {
-		props.setProperty(propName(field), String.valueOf(field.get(this)));
+	private void storeBoolean(Field field) {
+		props.setProperty(propName(field), String.valueOf(getField(field)));
 	}
 
-	private void storeString(Field field) throws IllegalAccessException {
-		props.setProperty(propName(field), (String)field.get(this));
+	private void storeString(Field field) {
+		props.setProperty(propName(field), (String)getField(field));
 	}
 
-	private void storeDate(Field field) throws IllegalAccessException, IOException {
+	private void storeDate(Field field) throws IOException {
 		SimpleDateFormat df = df(field);
-		props.setProperty(propName(field), df.format((Date)field.get(this)));
+		props.setProperty(propName(field), df.format((Date)getField(field)));
 	}
 
 	/** This performs a shallow store of the key list only. It assumes each element has already been stored. */
-	private void storeList(Field field) throws IllegalAccessException {
+	private void storeList(Field field) {
 		String propName = propName(field);
-		EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
+		EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
 		StringBuilder listStr = new StringBuilder();
 		for (Entity entity : list) {
 			if (listStr.length() == 0)
@@ -373,31 +411,36 @@ public abstract class Entity {
 		props.setProperty(propName, listStr.toString());
 	}
 
-	private void setField(Field field, String s) throws IllegalAccessException, IOException, ParseException {
-		Class fieldType = field.getType();
-		if (fieldType == Integer.TYPE)
-			field.setInt(this, Integer.parseInt(s != null ? s : "0"));
-		else if (fieldType == Double.TYPE)
-			field.setDouble(this, Double.parseDouble(s != null ? s : "0.0"));
-		else if (fieldType == Boolean.TYPE)
-			field.setBoolean(this, Boolean.parseBoolean(s != null ? s : "false"));
-		else if (fieldType == String.class)
-			field.set(this, s != null ? s : "");
-		else if (fieldType == Date.class) {
-			final SimpleDateFormat df = df(field);
-			field.set(this, df.parse(s != null ? s : df.format(new Date())));
+	private void setField(Field field, String s) throws IOException, ParseException {
+		try {
+			Class fieldType = field.getType();
+			if (fieldType == Integer.TYPE)
+				field.setInt(this, Integer.parseInt(s != null ? s : "0"));
+			else if (fieldType == Double.TYPE)
+				field.setDouble(this, Double.parseDouble(s != null ? s : "0.0"));
+			else if (fieldType == Boolean.TYPE)
+				field.setBoolean(this, Boolean.parseBoolean(s != null ? s : "false"));
+			else if (fieldType == String.class)
+				field.set(this, s != null ? s : "");
+			else if (fieldType == Date.class) {
+				final SimpleDateFormat df = df(field);
+				field.set(this, df.parse(s != null ? s : df.format(new Date())));
+			}
+			else if (fieldType == List.class) {
+				EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
+				List<String> keys = new ArrayList<String>();
+				String keysStr = (s != null ? s : "").trim();
+				String[] keysArray = keysStr.length() == 0 ? new String[0] : keysStr.split(", *");
+				for (String key : keysArray)
+					keys.add(key);
+				list.setKeys(keys);
+			}
+			else
+				throw new IOException("Unsupported type " + fieldType);
 		}
-		else if (fieldType == List.class) {
-			EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
-			List<String> keys = new ArrayList<String>();
-			String keysStr = (s != null ? s : "").trim();
-			String[] keysArray = keysStr.length() == 0 ? new String[0] : keysStr.split(", *");
-			for (String key : keysArray)
-				keys.add(key);
-			list.setKeys(keys);
+		catch (IllegalAccessException e) {
+			throw new RuntimeException(e);
 		}
-		else
-			throw new IOException("Unsupported type " + fieldType);
 	}
 
 	private String propName(Field field) {

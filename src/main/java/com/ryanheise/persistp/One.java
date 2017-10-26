@@ -14,6 +14,10 @@ public class One<X extends Entity> implements EntityContainer<X> {
 		this.entityClass = entityClass;
 	}
 
+	void delete() throws IOException {
+		get().delete();
+	}
+
 	@Override
 	public boolean isBound() {
 		return filePattern != null;

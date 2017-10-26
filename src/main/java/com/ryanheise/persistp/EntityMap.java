@@ -10,6 +10,7 @@ import java.util.AbstractMap;
 import java.util.AbstractSet;
 import java.util.Iterator;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.io.File;
 
 /**
@@ -67,6 +68,12 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 		this.filePattern = filePattern;
 		if (filePattern != null)
 			loadKeys();
+	}
+
+	void delete() throws IOException {
+		for (X entity : new ArrayList<X>(values())) {
+			entity.delete();
+		}
 	}
 
 	@Override
