@@ -22,7 +22,7 @@ import java.lang.reflect.ParameterizedType;
 import java.io.File;
 
 public abstract class Entity {
-	private File file;
+	private String key;
 	private Properties props = new Properties();
 	private Map<Field,SimpleDateFormat> dateFormats = new HashMap<Field,SimpleDateFormat>();
 	private Field keyField;
@@ -66,8 +66,8 @@ public abstract class Entity {
 	}
 
 	protected void load() throws IOException {
-		try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
-			if (isPropertiesFormat())
+		try (InputStream in = new BufferedInputStream(new FileInputStream(file()))) {
+			if (parentMap.isPropertiesFormat())
 				props.load(in);
 			else
 				props.loadFromXML(in);
@@ -114,9 +114,8 @@ public abstract class Entity {
 
 	// parent must be set before saving
 	public synchronized void save() throws IOException {
-		if (file == null)
-			throw new IllegalStateException("Entity needs to be associated with a file before saving");
-		file.getCanonicalFile().getParentFile().mkdirs();
+		if (parentMap == null)
+			throw new IllegalStateException("saveTo() required on first save");
 		
 		try {
 			Class klass = getClass();
@@ -141,8 +140,37 @@ public abstract class Entity {
 				else
 					throw new IOException("Unsupported type " + fieldType);
 			}
-			try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file))) {
-				if (isPropertiesFormat())
+			String newKey = getKeyProp();
+			if (key != null && !key.equals(newKey)) {
+				parentMap.substituteStarFile(key).renameTo(parentMap.substituteStarFile(newKey));
+				putEntity();
+				parentMap.removeKey(key);
+				// invalidate child maps based on old file location
+				// and point them to the new location
+				for (Field field : klass.getDeclaredFields()) {
+					field.setAccessible(true);
+					FPattern fPattern = field.getAnnotation(FPattern.class);
+					if (fPattern != null) {
+						File filePattern = new File(file().getParent(), fPattern.value());
+						Class fieldType = field.getType();
+						if (fieldType == Map.class) {
+							EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)field.get(this);
+							map.rebind(filePattern);
+						}
+						else if (fieldType == List.class) {
+							EntityList<? extends Entity> list = (EntityList<? extends Entity>)field.get(this);
+							list.rebind(filePattern);
+						}
+					}
+				}
+				key = newKey;
+			}
+			else {
+				file().getParentFile().mkdirs();
+			}
+			// write out the properties to the file
+			try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file()))) {
+				if (parentMap.isPropertiesFormat())
 					props.store(out, "");
 				else
 					props.storeToXML(out, "");
@@ -151,6 +179,11 @@ public abstract class Entity {
 		catch (IllegalAccessException e) {
 			throw new IOException(e);
 		}
+	}
+
+	private <X extends Entity> void putEntity() throws IOException, IllegalAccessException {
+		EntityMap<X> parentMap = (EntityMap<X>)this.parentMap;
+		parentMap.putEx(getKeyProp(), (X)this);
 	}
 
 	/* This would be nice to have, but not until we also provide a similarly convenient
@@ -168,12 +201,11 @@ public abstract class Entity {
 	}
 	*/
 
-	public synchronized final <Y extends Entity> void saveTo(Map<String, Y> plainParentMap) throws IOException {
-		EntityMap<Y> parentMap = (EntityMap<Y>)plainParentMap;
+	public synchronized final void saveTo(Map<String, ? extends Entity> parentMap) throws IOException {
 		try {
-			setParent(parentMap);
+			setParent((EntityMap<? extends Entity>)parentMap);
 			save();
-			parentMap.putEx(getKeyProp(), (Y)this);
+			putEntity();
 		}
 		catch (IllegalAccessException e) {
 			throw new IOException(e);
@@ -183,7 +215,7 @@ public abstract class Entity {
 	public synchronized void delete() throws IOException {
 		if (parentMap != null)
 			parentMap.removeKey(getKeyProp());
-		File current = file.getCanonicalFile();
+		File current = file().getCanonicalFile();
 		do {
 			if (current.isFile()) {
 				if (!current.delete())
@@ -200,14 +232,6 @@ public abstract class Entity {
 		while ((current = current.getParentFile()) != null);
 	}
 
-	File getPropertiesFile() {
-		return file;
-	}
-
-	private boolean isPropertiesFormat() {
-		return file.getName().endsWith(".properties");
-	}
-
 	String getKeyProp() {
 		try {
 			keyField.setAccessible(true);
@@ -220,8 +244,12 @@ public abstract class Entity {
 	}
 
 	private void setKeyProp(String key) throws IllegalAccessException, IOException, ParseException {
-		if (keyField != null)
-			setField(keyField, key);
+		this.key = key;
+		setField(keyField, key);
+	}
+
+	private File file() throws IOException {
+		return parentMap.substitute(getKeyProp()).getCanonicalFile();
 	}
 
 	// must set the key prop before calling this.
@@ -232,14 +260,13 @@ public abstract class Entity {
 	private void setParent(EntityMap<? extends Entity> parentMap) throws IllegalAccessException, IOException {
 		Entity parent = parentMap.getParent();
 		this.parentMap = parentMap;
-		file = parentMap.substitute(getKeyProp());
 		Class klass = getClass();
 		for (Field field : klass.getDeclaredFields()) {
 			field.setAccessible(true);
 			Class fieldType = field.getType();
 			FPattern fPattern = field.getAnnotation(FPattern.class);
 			if (fPattern != null) {
-				File filePattern = new File(file.getParent(), fPattern.value());
+				File filePattern = new File(file().getParent(), fPattern.value());
 				if (fieldType == Map.class) {
 					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)field.get(this);
 					map.bind(filePattern);

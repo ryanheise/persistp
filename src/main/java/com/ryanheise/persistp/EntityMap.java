@@ -49,6 +49,12 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		cache.put(entityMap.filePattern, new SoftReference(entityMap));
 	}
 
+	private static synchronized <Y extends Entity> void renameInCache(EntityMap<Y> entityMap, File filePattern) {
+		cache.remove(entityMap.filePattern);
+		entityMap.filePattern = filePattern;
+		cache(entityMap);
+	}
+
 	private Entity parent;
 	private Class<X> entityClass;
 	private File filePattern;
@@ -68,6 +74,14 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		this.filePattern = filePattern;
 		loadKeys();
 		cache(this);
+	}
+
+	void rebind(File filePattern) throws IOException {
+		renameInCache(this, filePattern);
+	}
+
+	boolean isPropertiesFormat() {
+		return filePattern.getName().endsWith(".properties");
 	}
 
 	File getFilePattern() {
@@ -229,6 +243,19 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 		return new File(filePattern.getPath().replace("*", key));
 	}
 
+	File getStarFile() throws IOException {
+		File starFile = filePattern.getCanonicalFile();
+		while (starFile != null && !starFile.getName().contains("*"))
+			starFile = starFile.getParentFile();
+		if (starFile == null)
+			throw new IllegalArgumentException("filePattern must contain *");
+		return starFile;
+	}
+
+	File substituteStarFile(String key) throws IOException {
+		return new File(getStarFile().getPath().replace("*", key));
+	}
+
 	@Override
 	public Set<String> keySet() {
 		return entities.keySet();
@@ -236,25 +263,22 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> {
 
 	private void loadKeys() throws IOException {
 		// /a/b/c/d/e*f/g/h/i
-		File starFile = filePattern.getCanonicalFile();
-		while (starFile != null && !starFile.getName().contains("*"))
-			starFile = starFile.getParentFile();
-		if (starFile == null)
-			throw new IllegalArgumentException("filePattern must contain *");
+		File starFile = getStarFile();
 		// starFile contains *
 		String pattern = starFile.getName();
 		String beforeStar = pattern.substring(0, pattern.indexOf('*'));
 		String afterStar = pattern.substring(pattern.indexOf('*') + 1);
 		File directory = starFile.getParentFile();
-		directory.mkdirs();
-		for (File file : directory.listFiles()) {
-			String name = file.getName();
-			String part = name;
-			if (part.startsWith(beforeStar)) {
-				part = part.substring(beforeStar.length());
-				if (part.endsWith(afterStar)) {
-					part = part.substring(0, part.length() - afterStar.length());
-					entities.put(part, null);
+		if (directory.exists()) {
+			for (File file : directory.listFiles()) {
+				String name = file.getName();
+				String part = name;
+				if (part.startsWith(beforeStar)) {
+					part = part.substring(beforeStar.length());
+					if (part.endsWith(afterStar)) {
+						part = part.substring(0, part.length() - afterStar.length());
+						entities.put(part, null);
+					}
 				}
 			}
 		}

@@ -33,6 +33,10 @@ public class EntityList<X extends Entity> extends AbstractList<X> {
 		map = EntityMap.instance(parent, entityClass, filePattern);
 	}
 
+	void rebind(File filePattern) throws IOException {
+		bind(filePattern);
+	}
+
 	void setKeys(List<String> keys) {
 		 this.keys = keys;
 	}
