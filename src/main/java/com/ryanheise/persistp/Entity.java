@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Set;
 import java.util.HashSet;
 import java.lang.reflect.ParameterizedType;
+import java.util.stream.Collectors;
 import java.io.File;
 
 public abstract class Entity {
@@ -40,17 +41,37 @@ public abstract class Entity {
 					else
 						keyField = field;
 				}
+				Class fieldType = field.getType();
 				FPattern fPattern = field.getAnnotation(FPattern.class);
 				if (fPattern != null) {
-					Class fieldType = field.getType();
 					if (fieldType == Map.class)
-						loadMap(field);
+						initEntityMap(field);
 					else if (fieldType == List.class)
-						loadList(field);
+						initEntityList(field);
 					else if (fieldType == One.class)
-						loadOne(field);
+						initOne(field);
 					else
 						throw new IllegalStateException(fieldType + " field doesn't support @FPattern");
+				}
+				else {
+					Prop prop = field.getAnnotation(Prop.class);
+					if (prop != null) {
+						if (fieldType == List.class) {
+							try {
+								ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+								Class<?> elementType = (Class<?>)pType.getActualTypeArguments()[0]; 
+								if (elementType == String.class)
+									field.set(this, new ArrayList<String>());
+								else if (elementType == Integer.class)
+									field.set(this, new ArrayList<Integer>());
+								else
+									throw new IllegalStateException(fieldType + " field has unsupported type for @Prop");
+							}
+							catch (IllegalAccessException e) {
+								throw new RuntimeException(e);
+							}
+						}
+					}
 				}
 			}
 		}
@@ -71,38 +92,44 @@ public abstract class Entity {
 	}
 
 	protected void load() throws IOException {
-		try (InputStream in = new BufferedInputStream(new FileInputStream(file()))) {
-			if (parentContainer.isPropertiesFormat())
-				props.load(in);
-			else
-				props.loadFromXML(in);
-			Class klass = getClass();
-			for (Field field : klass.getDeclaredFields()) {
-				field.setAccessible(true);
-				Class fieldType = field.getType();
-				String propName = propName(field);
-				if (propName != null)
-					setField(field, props.getProperty(propName));
-			}
+		File file = getEntityFile();
+		if (file.isDirectory()) {
+			// Nothing to load, and key has already been set
 		}
-		catch (ParseException e) {
-			throw new IOException(e);
+		else {
+			try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
+				if (isPropertiesFormat())
+					props.load(in);
+				else
+					props.loadFromXML(in);
+				Class klass = getClass();
+				for (Field field : klass.getDeclaredFields()) {
+					field.setAccessible(true);
+					Class fieldType = field.getType();
+					String propName = propName(field);
+					if (propName != null)
+						setField(field, props.getProperty(propName));
+				}
+			}
+			catch (ParseException e) {
+				throw new IOException(e);
+			}
 		}
 	}
 
-	protected final String getProperty(String key) {
+	protected String getProperty(String key) {
 		return props.getProperty(key);
 	}
 
-	protected final String getProperty(String key, String def) {
+	protected String getProperty(String key, String def) {
 		return props.getProperty(key, def);
 	}
 
-	protected final void setProperty(String key, String value) {
+	protected void setProperty(String key, String value) {
 		props.setProperty(key, value);
 	}
 
-	protected final void removeProperty(String key) {
+	protected void removeProperty(String key) {
 		props.remove(key);
 	}
 
@@ -117,32 +144,57 @@ public abstract class Entity {
 		parent.save();
 	}
 
+	private boolean isPropertiesFormat() throws IOException {
+		return getEntityFile().getName().endsWith(".properties");
+	}
+
+	private boolean isXmlFormat() throws IOException {
+		return getEntityFile().getName().endsWith(".xml");
+	}
+
+	private boolean isDirectoryFormat() throws IOException {
+		return !isPropertiesFormat() && !isXmlFormat();
+	}
+
 	// parent must be set before saving
 	public synchronized void save() throws IOException {
 		if (parentContainer == null)
 			throw new IllegalStateException("saveTo() required on first save");
 		
 		Class klass = getClass();
-		for (Field field : klass.getDeclaredFields()) {
-			field.setAccessible(true);
-			String propName = propName(field);
-			if (propName == null) continue;
-			Object value = getField(field);
-			Class fieldType = field.getType();
-			if (fieldType == Integer.TYPE)
-				storeInt(field);
-			else if (fieldType == Double.TYPE)
-				storeDouble(field);
-			else if (fieldType == Boolean.TYPE)
-				storeBoolean(field);
-			else if (fieldType == String.class)
-				storeString(field);
-			else if (fieldType == Date.class)
-				storeDate(field);
-			else if (fieldType == List.class)
-				storeList(field);
-			else
-				throw new IOException("Unsupported type " + fieldType);
+		if (!isDirectoryFormat()) {
+			// Put the field values into props
+			for (Field field : klass.getDeclaredFields()) {
+				field.setAccessible(true);
+				String propName = propName(field);
+				if (propName == null) continue;
+				Object value = getField(field);
+				Class fieldType = field.getType();
+				if (fieldType == Integer.TYPE)
+					storeAsString(field);
+				else if (fieldType == Long.TYPE)
+					storeAsString(field);
+				else if (fieldType == Double.TYPE)
+					storeAsString(field);
+				else if (fieldType == Boolean.TYPE)
+					storeAsString(field);
+				else if (fieldType == Integer.class)
+					storeAsStringOrNull(field);
+				else if (fieldType == Long.class)
+					storeAsStringOrNull(field);
+				else if (fieldType == Double.class)
+					storeAsStringOrNull(field);
+				else if (fieldType == Boolean.class)
+					storeAsStringOrNull(field);
+				else if (fieldType == String.class)
+					storeString(field);
+				else if (fieldType == Date.class)
+					storeDate(field);
+				else if (fieldType == List.class)
+					storeList(field);
+				else
+					throw new IOException("Unsupported type " + fieldType);
+			}
 		}
 		// If this entity's key has changed, the file needs to be renamed
 		String newKey = getKeyProp();
@@ -154,7 +206,7 @@ public abstract class Entity {
 				field.setAccessible(true);
 				FPattern fPattern = field.getAnnotation(FPattern.class);
 				if (fPattern != null) {
-					File filePattern = new File(file().getParent(), fPattern.value());
+					File filePattern = new File(getEntityDirectory(), fPattern.value());
 					Class fieldType = field.getType();
 					if (fieldType == Map.class) {
 						EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
@@ -169,14 +221,21 @@ public abstract class Entity {
 			key = newKey;
 		}
 		else {
-			file().getParentFile().mkdirs();
+			getEntityFile().getParentFile().mkdirs();
 		}
-		// write out the properties to the file
-		try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file()))) {
-			if (parentContainer.isPropertiesFormat())
-				props.store(out, "");
-			else
-				props.storeToXML(out, "");
+		File file = getEntityFile();
+		if (isDirectoryFormat()) {
+			// Create the directory
+			file.mkdirs();
+		}
+		else {
+			// write out the properties to the file
+			try (OutputStream out = new BufferedOutputStream(new FileOutputStream(file))) {
+				if (isPropertiesFormat())
+					props.store(out, "");
+				else
+					props.storeToXML(out, "");
+			}
 		}
 	}
 
@@ -223,7 +282,7 @@ public abstract class Entity {
 			field.setAccessible(true);
 			FPattern fPattern = field.getAnnotation(FPattern.class);
 			if (fPattern != null) {
-				File filePattern = new File(file().getParent(), fPattern.value());
+				File filePattern = new File(getEntityDirectory(), fPattern.value());
 				Class fieldType = field.getType();
 				if (fieldType == Map.class) {
 					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
@@ -244,7 +303,7 @@ public abstract class Entity {
 
 		// Delete this entity
 		parentContainer.removeEntity(getKeyProp());
-		File current = file().getCanonicalFile();
+		File current = getEntityFile().getCanonicalFile();
 		do {
 			if (current.isFile()) {
 				if (!current.delete())
@@ -282,8 +341,12 @@ public abstract class Entity {
 		setField(keyField, key);
 	}
 
-	private File file() throws IOException {
+	protected File getEntityFile() throws IOException {
 		return parentContainer.substitute(getKeyProp()).getCanonicalFile();
+	}
+
+	protected File getEntityDirectory() throws IOException {
+		return isDirectoryFormat() ? getEntityFile() : getEntityFile().getParentFile();
 	}
 
 	// must set the key prop before calling this.
@@ -300,7 +363,7 @@ public abstract class Entity {
 			Class fieldType = field.getType();
 			FPattern fPattern = field.getAnnotation(FPattern.class);
 			if (fPattern != null) {
-				File filePattern = new File(file().getParent(), fPattern.value());
+				File filePattern = new File(getEntityDirectory(), fPattern.value());
 				if (fieldType == Map.class) {
 					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
 					map.bind(filePattern);
@@ -337,7 +400,7 @@ public abstract class Entity {
 		return df;
 	}
 
-	private void loadList(Field field) throws IOException {
+	private void initEntityList(Field field) throws IOException {
 		try {
 			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
 			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0]; 
@@ -350,7 +413,7 @@ public abstract class Entity {
 		}
 	}
 
-	private void loadMap(Field field) throws IOException {
+	private void initEntityMap(Field field) throws IOException {
 		try {
 			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
 			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[1]; 
@@ -363,7 +426,7 @@ public abstract class Entity {
 		}
 	}
 
-	private void loadOne(Field field) throws IOException {
+	private void initOne(Field field) throws IOException {
 		try {
 			ParameterizedType pType = (ParameterizedType)field.getGenericType();
 			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[0];
@@ -376,16 +439,17 @@ public abstract class Entity {
 		}
 	}
 
-	private void storeInt(Field field) {
+	private void storeAsString(Field field) {
 		props.setProperty(propName(field), String.valueOf(getField(field)));
 	}
 
-	private void storeDouble(Field field) {
-		props.setProperty(propName(field), String.valueOf(getField(field)));
-	}
-
-	private void storeBoolean(Field field) {
-		props.setProperty(propName(field), String.valueOf(getField(field)));
+	private void storeAsStringOrNull(Field field) {
+		String key = propName(field);
+		Object value = getField(field);
+		if (value != null)
+			props.setProperty(key, String.valueOf(value));
+		else
+			props.remove(key);
 	}
 
 	private void storeString(Field field) {
@@ -400,26 +464,64 @@ public abstract class Entity {
 	/** This performs a shallow store of the key list only. It assumes each element has already been stored. */
 	private void storeList(Field field) {
 		String propName = propName(field);
-		EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
-		StringBuilder listStr = new StringBuilder();
-		for (Entity entity : list) {
-			if (listStr.length() == 0)
-				listStr.append(entity.getKeyProp());
-			else
-				listStr.append(",").append(entity.getKeyProp());
+		ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+		Class<?> elementType = (Class<?>)pType.getActualTypeArguments()[0]; 
+		if (Entity.class.isAssignableFrom(elementType)) {
+			EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
+			props.setProperty(propName, String.join(",", list.stream().map(Entity::getKeyProp).collect(Collectors.toList())));
 		}
-		props.setProperty(propName, listStr.toString());
+		else {
+			List<?> list = (List<?>)getField(field);
+			props.setProperty(propName, String.join(",", list.stream().map(String::valueOf).collect(Collectors.toList())));
+		}
+	}
+
+	private int parseInt(String s, int def) {
+		try {
+			return Integer.parseInt(s);
+		}
+		catch (Exception e) {
+			return def;
+		}
+	}
+
+	private long parseLong(String s, long def) {
+		try {
+			return Long.parseLong(s);
+		}
+		catch (Exception e) {
+			return def;
+		}
+	}
+
+	private double parseDouble(String s, double def) {
+		try {
+			return Double.parseDouble(s);
+		}
+		catch (Exception e) {
+			return def;
+		}
 	}
 
 	private void setField(Field field, String s) throws IOException, ParseException {
 		try {
 			Class fieldType = field.getType();
 			if (fieldType == Integer.TYPE)
-				field.setInt(this, Integer.parseInt(s != null ? s : "0"));
+				field.setInt(this, parseInt(s, 0));
+			else if (fieldType == Long.TYPE)
+				field.setLong(this, parseLong(s, 0L));
 			else if (fieldType == Double.TYPE)
-				field.setDouble(this, Double.parseDouble(s != null ? s : "0.0"));
+				field.setDouble(this, parseDouble(s, 0.0));
 			else if (fieldType == Boolean.TYPE)
 				field.setBoolean(this, Boolean.parseBoolean(s != null ? s : "false"));
+			else if (fieldType == Integer.class)
+				field.set(this, (s == null || s.isEmpty()) ? null : new Integer(parseInt(s, 0)));
+			else if (fieldType == Long.class)
+				field.set(this, (s == null || s.isEmpty()) ? null : new Long(parseLong(s, 0L)));
+			else if (fieldType == Double.class)
+				field.set(this, (s == null || s.isEmpty()) ? null : new Double(parseDouble(s, 0.0)));
+			else if (fieldType == Boolean.class)
+				field.set(this, (s == null || s.isEmpty()) ? null : new Boolean(s));
 			else if (fieldType == String.class)
 				field.set(this, s != null ? s : "");
 			else if (fieldType == Date.class) {
@@ -427,13 +529,27 @@ public abstract class Entity {
 				field.set(this, df.parse(s != null ? s : df.format(new Date())));
 			}
 			else if (fieldType == List.class) {
-				EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
 				List<String> keys = new ArrayList<String>();
 				String keysStr = (s != null ? s : "").trim();
 				String[] keysArray = keysStr.length() == 0 ? new String[0] : keysStr.split(", *");
 				for (String key : keysArray)
 					keys.add(key);
-				list.setKeys(keys);
+				ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
+				Class<?> elementType = (Class<?>)pType.getActualTypeArguments()[0]; 
+				if (Entity.class.isAssignableFrom(elementType)) {
+					EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
+					list.setKeys(keys);
+				}
+				else if (elementType == String.class) {
+					List<String> list = (List<String>)getField(field);
+					list.clear();
+					list.addAll(keys);
+				}
+				else if (elementType == Integer.class) {
+					List<Integer> list = (List<Integer>)getField(field);
+					list.clear();
+					list.addAll(keys.stream().map(Integer::new).collect(Collectors.toList()));
+				}
 			}
 			else
 				throw new IOException("Unsupported type " + fieldType);

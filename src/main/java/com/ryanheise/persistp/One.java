@@ -9,9 +9,14 @@ public class One<X extends Entity> implements EntityContainer<X> {
 	private File filePattern;
 	private X entity;
 
-	public One(Entity parent, Class<X> entityClass) {
+	public One(Entity parent, Class<X> entityClass, File filePattern) {
 		this.parent = parent;
 		this.entityClass = entityClass;
+		this.filePattern = filePattern;
+	}
+
+	public One(Entity parent, Class<X> entityClass) {
+		this(parent, entityClass, null);
 	}
 
 	void delete() throws IOException {
@@ -31,11 +36,6 @@ public class One<X extends Entity> implements EntityContainer<X> {
 	@Override
 	public File substitute(String key) {
 		return filePattern;
-	}
-
-	@Override
-	public boolean isPropertiesFormat() {
-		return filePattern.getName().endsWith(".properties");
 	}
 
 	@Override

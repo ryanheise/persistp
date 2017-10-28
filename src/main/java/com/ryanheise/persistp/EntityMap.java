@@ -89,12 +89,8 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 	}
 
 	void rebind(File filePattern) throws IOException {
+		// TOOD: nested children need to be rebound, too.
 		renameInCache(this, filePattern);
-	}
-
-	@Override
-	public boolean isPropertiesFormat() {
-		return filePattern.getName().endsWith(".properties");
 	}
 
 	File getFilePattern() {
