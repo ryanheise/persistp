@@ -57,6 +57,14 @@ public class One<X extends Entity> implements EntityContainer<X> {
 		this.filePattern = filePattern;
 	}
 
+	void rebind(File filePattern) throws IOException {
+		if (filePattern.equals(this.filePattern))
+			return;
+		this.filePattern = filePattern;
+		if (entity != null)
+			entity.rebind();
+	}
+
 	public X get() {
 		try {
 			if (entity == null) {
@@ -68,6 +76,9 @@ public class One<X extends Entity> implements EntityContainer<X> {
 				}
 			}
 			return entity;
+		}
+		catch (RuntimeException e) {
+			throw e;
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);

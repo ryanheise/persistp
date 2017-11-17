@@ -11,6 +11,7 @@ import java.util.AbstractSet;
 import java.util.Iterator;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 import java.io.File;
 
 /**
@@ -66,8 +67,6 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 		this.parent = parent;
 		this.entityClass = entityClass;
 		this.filePattern = filePattern;
-		if (filePattern != null)
-			loadKeys();
 	}
 
 	void delete() throws IOException {
@@ -84,13 +83,18 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 	// called by parent entity as soon as the file is known
 	void bind(File filePattern) throws IOException {
 		this.filePattern = filePattern;
-		loadKeys();
 		cache(this);
 	}
 
 	void rebind(File filePattern) throws IOException {
-		// TOOD: nested children need to be rebound, too.
 		renameInCache(this, filePattern);
+		for (SoftReference<X> ref : entities.values()) {
+			if (ref != null) {
+				X entity = ref.get();
+				if (entity != null)
+					entity.rebind();
+			}
+		}
 	}
 
 	File getFilePattern() {
@@ -109,15 +113,13 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 
 	@Override
 	public void putEntity(X entity) throws IOException {
-		putEx(entity.getKeyProp(), entity);
+		putEx(entity.getKeyFieldValue(), entity);
 	}
 
-	X putEx(String key, X value) throws IOException {
+	void putEx(String key, X value) throws IOException {
 		if (filePattern == null)
 			throw new IllegalStateException("Must be associated with a file first");
-		X old = get(key);
 		entities.put(key, new SoftReference<X>(value));
-		return old;
 	}
 
 	@Override
@@ -157,7 +159,7 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 
 	public boolean add(X entity) {
 		try {
-			put(entity.getKeyProp(), entity);
+			put(entity.getKeyFieldValue(), entity);
 			return true;
 		}
 		catch (Exception e) {
@@ -187,21 +189,21 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 	}
 
 	private final class EntrySet extends AbstractSet<Map.Entry<String, X>> {
-		public final int size() { return entities.size(); }
+		public final int size() { return keyCount(); }
 		public final Iterator<Map.Entry<String, X>> iterator() {
 			return new EntryIterator();
 		}
 	}
 
 	private final class EntityEntry implements Map.Entry<String, X> {
-		private Map.Entry<String, SoftReference<X>> originalEntry;
+		private String key;
 
-		public EntityEntry(Map.Entry<String, SoftReference<X>> originalEntry) {
-			this.originalEntry = originalEntry;
+		public EntityEntry(String key) {
+			this.key = key;
 		}
 
 		public String getKey() {
-			return originalEntry.getKey();
+			return key;
 		}
 
 		public X getValue() {
@@ -216,19 +218,46 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 	}
 
 	private final class EntryIterator implements Iterator<Map.Entry<String, X>> {
-		private Iterator<Map.Entry<String, SoftReference<X>>> it = entities.entrySet().iterator();
+		private List<String> keys = new ArrayList<String>();
+		private int i = -1;
+
+		public EntryIterator() {
+			try {
+				// /a/b/c/d/e*f/g/h/i
+				File starFile = getStarFile();
+				// starFile contains *
+				String pattern = starFile.getName();
+				int starIdx = pattern.indexOf('*');
+				String beforeStar = pattern.substring(0, starIdx);
+				String afterStar = pattern.substring(starIdx + 1);
+				File directory = starFile.getParentFile();
+				if (directory.exists()) {
+					for (File file : directory.listFiles()) {
+						String name = file.getName();
+						String part = name;
+						if (part.startsWith(beforeStar)) {
+							part = part.substring(beforeStar.length());
+							if (part.endsWith(afterStar)) {
+								part = part.substring(0, part.length() - afterStar.length());
+								if (substitute(part).exists())
+									keys.add(part);
+							}
+						}
+					}
+				}
+			}
+			catch (IOException e) {
+				throw new RuntimeException(e);
+			}
+		}
 
 		public final Map.Entry<String, X> next() {
-			Map.Entry<String, SoftReference<X>> originalEntry = it.next();
-			if (originalEntry != null) {
-				return new EntityEntry(originalEntry);
-			}
-			return null;
+			return new EntityEntry(keys.get(++i));
 		}
 
 		@Override
 		public boolean hasNext() {
-			return it.hasNext();
+			return i + 1 < keys.size();
 		}
 	}
 
@@ -247,6 +276,9 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 					entity.load(this, key);
 					entities.put(key, new SoftReference<X>(entity));
 				}
+				catch (RuntimeException e) {
+					throw e;
+				}
 				catch (Exception e) {
 					throw new RuntimeException(e);
 				}
@@ -263,7 +295,10 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 	@Override
 	public void rekeyEntity(String oldKey, String newKey) throws IOException {
 		X entity = get(oldKey);
-		substituteStarFile(oldKey).renameTo(substituteStarFile(newKey));
+		File oldFile = substituteStarFile(oldKey);
+		File newFile = substituteStarFile(newKey);
+		if (!oldFile.renameTo(newFile))
+			throw new IOException("Failed to rename " + oldFile + " to " + newFile);
 		putEntity(entity);
 		removeEntity(oldKey);
 	}
@@ -281,31 +316,38 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 		return new File(getStarFile().getPath().replace("*", key));
 	}
 
-	@Override
-	public Set<String> keySet() {
-		return entities.keySet();
-	}
-
-	private void loadKeys() throws IOException {
-		// /a/b/c/d/e*f/g/h/i
-		File starFile = getStarFile();
-		// starFile contains *
-		String pattern = starFile.getName();
-		String beforeStar = pattern.substring(0, pattern.indexOf('*'));
-		String afterStar = pattern.substring(pattern.indexOf('*') + 1);
-		File directory = starFile.getParentFile();
-		if (directory.exists()) {
-			for (File file : directory.listFiles()) {
-				String name = file.getName();
-				String part = name;
-				if (part.startsWith(beforeStar)) {
-					part = part.substring(beforeStar.length());
-					if (part.endsWith(afterStar)) {
-						part = part.substring(0, part.length() - afterStar.length());
-						entities.put(part, null);
+	private int keyCount() {
+		try {
+			int count = 0;
+			// /a/b/c/d/e*f/g/h/i
+			File starFile = getStarFile();
+			// starFile contains *
+			String pattern = starFile.getName();
+			int starIdx = pattern.indexOf('*');
+			String beforeStar = pattern.substring(0, starIdx);
+			String afterStar = pattern.substring(starIdx + 1);
+			File directory = starFile.getParentFile();
+			if (directory.exists()) {
+				for (File file : directory.listFiles()) {
+					String name = file.getName();
+					String part = name;
+					if (part.startsWith(beforeStar)) {
+						part = part.substring(beforeStar.length());
+						if (part.endsWith(afterStar)) {
+							part = part.substring(0, part.length() - afterStar.length());
+							if (substitute(part).exists())
+								count++;
+						}
 					}
 				}
 			}
+			return count;
+		}
+		catch (RuntimeException e) {
+			throw e;
+		}
+		catch (IOException e) {
+			throw new RuntimeException(e);
 		}
 	}
 }

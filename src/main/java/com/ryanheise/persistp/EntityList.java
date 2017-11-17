@@ -7,16 +7,16 @@ import java.io.File;
 import java.lang.reflect.Constructor;
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.stream.Collectors;
 import java.util.List;
 
-public class EntityList<X extends Entity> extends AbstractList<X> {
+public class EntityList<X extends Entity> extends ArrayList<X> { //extends AbstractList<X> {
 	static <X extends Entity> EntityList<X> create(Entity parent, Class<X> entityClass) throws IOException {
 		return new EntityList<X>(parent, entityClass);
 	}
 
 	private Entity parent;
 	private Class<X> entityClass;
-	private List<String> keys;
 	private File filePattern;
 	private EntityMap<X> map;
 
@@ -24,7 +24,6 @@ public class EntityList<X extends Entity> extends AbstractList<X> {
 		this.parent = parent;
 		this.entityClass = entityClass;
 		map = EntityMap.instance(parent, entityClass, filePattern);
-		keys = new ArrayList<String>();
 	}
 
 	// called by parent entity as soon as the file is known
@@ -34,11 +33,13 @@ public class EntityList<X extends Entity> extends AbstractList<X> {
 	}
 
 	void rebind(File filePattern) throws IOException {
-		bind(filePattern);
+		this.filePattern = filePattern;
+		map.rebind(filePattern);
 	}
 
 	void setKeys(List<String> keys) {
-		 this.keys = keys;
+		clear();
+		addAll(keys.stream().map(key -> map.get(key)).collect(Collectors.toList()));
 	}
 
 	Entity getParent() {
@@ -51,34 +52,5 @@ public class EntityList<X extends Entity> extends AbstractList<X> {
 
 	EntityMap<X> getMap() {
 		return map;
-	}
-
-	public X get(int i) {
-		String key = keys.get(i);
-		X entity = map.get(key);
-		return entity;
-	}
-
-	@Override
-	public void add(int i, X entity) {
-		String id = entity.getKeyProp();
-		keys.add(i, id);
-	}
-
-	@Override
-	public X remove(int i) {
-		X old = get(i);
-		keys.remove(i);
-		return old;
-	}
-
-	@Override
-	public int size() {
-		return keys.size();
-	}
-
-	@Override
-	public int hashCode() {
-		return size(); // Because the list is lazy, don't load the values.
 	}
 }

@@ -107,8 +107,19 @@ public abstract class Entity {
 					field.setAccessible(true);
 					Class fieldType = field.getType();
 					String propName = propName(field);
-					if (propName != null)
-						setField(field, props.getProperty(propName));
+					if (propName != null) {
+						String s = props.getProperty(propName);
+						// If the property is not present, use the initial value as the default
+						if (s == null) {
+							Prop prop = field.getAnnotation(Prop.class);
+							if (prop != null) {
+								String initial = prop.initial();
+								if (initial != null && initial.length() > 0)
+									s = initial;
+							}
+						}
+						setField(field, s);
+					}
 				}
 			}
 			catch (ParseException e) {
@@ -187,7 +198,7 @@ public abstract class Entity {
 				else if (fieldType == Boolean.class)
 					storeAsStringOrNull(field);
 				else if (fieldType == String.class)
-					storeString(field);
+					storeStringOrNull(field);
 				else if (fieldType == Date.class)
 					storeDate(field);
 				else if (fieldType == List.class)
@@ -197,32 +208,15 @@ public abstract class Entity {
 			}
 		}
 		// If this entity's key has changed, the file needs to be renamed
-		String newKey = getKeyProp();
+		String newKey = getKeyFieldValue();
 		if (key != null && !key.equals(newKey)) {
 			parentContainer.rekeyEntity(key, newKey);
-			// invalidate child maps based on old file location
-			// and point them to the new location
-			for (Field field : klass.getDeclaredFields()) {
-				field.setAccessible(true);
-				FPattern fPattern = field.getAnnotation(FPattern.class);
-				if (fPattern != null) {
-					File filePattern = new File(getEntityDirectory(), fPattern.value());
-					Class fieldType = field.getType();
-					if (fieldType == Map.class) {
-						EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
-						map.rebind(filePattern);
-					}
-					else if (fieldType == List.class) {
-						EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
-						list.rebind(filePattern);
-					}
-				}
-			}
-			key = newKey;
+			rebind();
 		}
 		else {
 			getEntityFile().getParentFile().mkdirs();
 		}
+		key = newKey;
 		File file = getEntityFile();
 		if (isDirectoryFormat()) {
 			// Create the directory
@@ -235,6 +229,32 @@ public abstract class Entity {
 					props.store(out, "");
 				else
 					props.storeToXML(out, "");
+			}
+		}
+	}
+
+	void rebind() throws IOException {
+		Class klass = getClass();
+		// invalidate child maps based on old file location
+		// and point them to the new location
+		for (Field field : klass.getDeclaredFields()) {
+			field.setAccessible(true);
+			FPattern fPattern = field.getAnnotation(FPattern.class);
+			if (fPattern != null) {
+				File filePattern = new File(getEntityDirectory(), fPattern.value());
+				Class fieldType = field.getType();
+				if (fieldType == Map.class) {
+					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
+					map.rebind(filePattern);
+				}
+				else if (fieldType == List.class) {
+					EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
+					list.rebind(filePattern);
+				}
+				else if (fieldType == One.class) {
+					One<? extends Entity> one = (One<? extends Entity>)getField(field);
+					one.rebind(filePattern);
+				}
 			}
 		}
 	}
@@ -302,7 +322,7 @@ public abstract class Entity {
 		}
 
 		// Delete this entity
-		parentContainer.removeEntity(getKeyProp());
+		parentContainer.removeEntity(getKeyFieldValue());
 		File current = getEntityFile().getCanonicalFile();
 		do {
 			if (current.isFile()) {
@@ -320,7 +340,7 @@ public abstract class Entity {
 		while ((current = current.getParentFile()) != null);
 	}
 
-	String getKeyProp() {
+	String getKeyFieldValue() {
 		if (keyField == null)
 			return null;
 		keyField.setAccessible(true);
@@ -342,7 +362,7 @@ public abstract class Entity {
 	}
 
 	protected File getEntityFile() throws IOException {
-		return parentContainer.substitute(getKeyProp()).getCanonicalFile();
+		return parentContainer.substitute(getKeyFieldValue()).getCanonicalFile();
 	}
 
 	protected File getEntityDirectory() throws IOException {
@@ -452,8 +472,13 @@ public abstract class Entity {
 			props.remove(key);
 	}
 
-	private void storeString(Field field) {
-		props.setProperty(propName(field), (String)getField(field));
+	private void storeStringOrNull(Field field) {
+		String key = propName(field);
+		String value = (String)getField(field);
+		if (value != null)
+			props.setProperty(key, value);
+		else
+			props.remove(key);
 	}
 
 	private void storeDate(Field field) throws IOException {
@@ -468,7 +493,7 @@ public abstract class Entity {
 		Class<?> elementType = (Class<?>)pType.getActualTypeArguments()[0]; 
 		if (Entity.class.isAssignableFrom(elementType)) {
 			EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
-			props.setProperty(propName, String.join(",", list.stream().map(Entity::getKeyProp).collect(Collectors.toList())));
+			props.setProperty(propName, String.join(",", list.stream().map(Entity::getKeyFieldValue).collect(Collectors.toList())));
 		}
 		else {
 			List<?> list = (List<?>)getField(field);

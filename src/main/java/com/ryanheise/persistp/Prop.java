@@ -10,4 +10,5 @@ import java.lang.annotation.Target;
 public @interface Prop {
 	public String name() default "";
 	public String value() default "";
+	public String initial() default "";
 }
