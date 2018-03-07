@@ -87,6 +87,8 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 	}
 
 	void rebind(File filePattern) throws IOException {
+		if (filePattern.equals(this.filePattern))
+			return;
 		renameInCache(this, filePattern);
 		for (SoftReference<X> ref : entities.values()) {
 			if (ref != null) {

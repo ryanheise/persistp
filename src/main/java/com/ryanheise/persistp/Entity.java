@@ -385,8 +385,12 @@ public abstract class Entity {
 			if (fPattern != null) {
 				File filePattern = new File(getEntityDirectory(), fPattern.value());
 				if (fieldType == Map.class) {
-					EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
-					map.bind(filePattern);
+					//EntityMap<? extends Entity> map = (EntityMap<? extends Entity>)getField(field);
+					//map.bind(filePattern);
+					// It is safe to reinitialise the map field. The map would have been
+					// empty because entities cannot be added to an EntityMap until it's
+					// filePattern is known.
+					initEntityMap(field, filePattern);
 				}
 				else if (fieldType == List.class) {
 					EntityList<? extends Entity> list = (EntityList<? extends Entity>)getField(field);
@@ -434,10 +438,14 @@ public abstract class Entity {
 	}
 
 	private void initEntityMap(Field field) throws IOException {
+		initEntityMap(field, null);
+	}
+
+	private void initEntityMap(Field field, File filePattern) throws IOException {
 		try {
 			ParameterizedType pType = (ParameterizedType)field.getGenericType(); 
 			Class<? extends Entity> elementType = (Class<? extends Entity>)pType.getActualTypeArguments()[1]; 
-			EntityMap<? extends Entity> map = EntityMap.instance(this, elementType, (File)null);
+			EntityMap<? extends Entity> map = EntityMap.instance(this, elementType, filePattern);
 			field.setAccessible(true);
 			field.set(this, map);
 		}

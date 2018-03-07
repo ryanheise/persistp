@@ -33,6 +33,8 @@ public class EntityList<X extends Entity> extends ArrayList<X> { //extends Abstr
 	}
 
 	void rebind(File filePattern) throws IOException {
+		if (filePattern.equals(this.filePattern))
+			return;
 		this.filePattern = filePattern;
 		map.rebind(filePattern);
 	}
