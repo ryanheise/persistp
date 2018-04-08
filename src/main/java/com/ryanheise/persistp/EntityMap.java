@@ -190,6 +190,16 @@ public class EntityMap<X extends Entity> extends AbstractMap<String, X> implemen
 		return (entrySet = this.entrySet) == null ? (this.entrySet = new EntrySet()) : entrySet;
 	}
 
+	@Override
+	public boolean containsKey(Object key) {
+		return get(key) != null;
+	}
+
+	@Override
+	public X get(Object key) {
+		return lazyGet((String)key);
+	}
+
 	private final class EntrySet extends AbstractSet<Map.Entry<String, X>> {
 		public final int size() { return keyCount(); }
 		public final Iterator<Map.Entry<String, X>> iterator() {
